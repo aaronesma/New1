@@ -34,6 +34,7 @@
   }
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0}
 body{
   background:var(--bg); color:var(--fg); font:15px/1.5 var(--body);
@@ -95,6 +96,11 @@ input[type=tel]{
 .installRow{display:flex;gap:12px;align-items:center}
 .installRow img{border-radius:11px;flex:none}
 .shareGlyph{display:inline-block;vertical-align:-2px;color:var(--accent)}
+.tune{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:4px}
+.tune .slider{margin-top:8px}
+.tuneHead{display:flex;justify-content:space-between;align-items:center}
+.tuneHead h3{font:700 1rem var(--display);margin:0}
+button.small{padding:6px 12px;font-size:.85rem;border-radius:8px}
 #toast{position:fixed;left:50%;bottom:max(20px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:500;max-width:calc(100% - 32px)}
 </style>
 </head>
@@ -129,7 +135,27 @@ input[type=tel]{
   <section id="voicePanel" class="panel" hidden>
     <h2>Your voice</h2>
     <div id="voices"></div>
-    <div class="slider">
+    <div id="tunePanel" class="tune" hidden>
+      <div class="tuneHead"><h3 id="tuneTitle">Tune voice</h3><button id="tuneReset" type="button" class="small">Reset</button></div>
+      <div class="slider">
+        <label for="tPitch">Pitch <output id="tPitchOut"></output></label>
+        <input id="tPitch" type="range" min="-12" max="14" step="1">
+      </div>
+      <div class="slider">
+        <label for="tShape">Voice shape <output id="tShapeOut"></output></label>
+        <input id="tShape" type="range" min="80" max="140" step="1">
+      </div>
+      <div class="slider">
+        <label for="tBreath">Breathiness <output id="tBreathOut"></output></label>
+        <input id="tBreath" type="range" min="0" max="100" step="5">
+      </div>
+      <div class="slider">
+        <label for="tAir">Brightness <output id="tAirOut"></output></label>
+        <input id="tAir" type="range" min="0" max="10" step="1">
+      </div>
+      <p class="note">Higher pitch and shape sound more feminine. Shape above about 130% starts to sound cartoonish. Your settings are saved on this device.</p>
+    </div>
+    <div class="slider" id="customSlider">
       <label for="pitch">Custom pitch <output id="pitchOut">0 semitones</output></label>
       <input id="pitch" type="range" min="-12" max="12" step="1" value="0">
     </div>
@@ -337,7 +363,7 @@ class Vocoder extends AudioWorkletProcessor {
 registerProcessor('vocoder', Vocoder);`;
 
 /* Each voice: st = pitch in semitones; robot = ring-mod Hz; echo = amount (0-1), delay = seconds;
-   filter = [type, Hz, Q, gain dB]; dist = distortion (0-1); voc = formant shift ratio (enables natural pitch shifting); trem = [Hz, depth]; vib = [Hz, depth in pitch ratio]. */
+   filter = [type, Hz, Q, gain dB]; dist = distortion (0-1); voc = formant shift ratio (enables natural pitch shifting); hp = low cut Hz; air = treble boost dB; breath = 0-1; trem = [Hz, depth]; vib = [Hz, depth in pitch ratio]. */
 const VOICE_GROUPS = [
   ['Pitch', {
     normal:   {name:'Normal',   hint:'Your voice',      st:0},
@@ -348,10 +374,10 @@ const VOICE_GROUPS = [
     chipmunk: {name:'Chipmunk', hint:'+10 st',          st:10},
   }],
   ['People', {
-    woman:    {name:'Woman',    hint:'Natural female',  st:9,  voc:1.17, filter:['peaking', 3000, 1, 3]},
-    girl:     {name:'Girl',     hint:'Young female',    st:12, voc:1.24, filter:['peaking', 3600, 1, 4]},
-    man:      {name:'Man',      hint:'Natural male',    st:-6, voc:0.87, filter:['peaking', 160, 0.8, 3]},
-    boy:      {name:'Boy',      hint:'Young male',      st:5,  voc:1.12, filter:['peaking', 2400, 1, 2]},
+    woman:    {name:'Woman',    hint:'Natural female',  st:10, voc:1.2,  hp:150, air:4, breath:0.25, filter:['peaking', 3000, 1, 2]},
+    girl:     {name:'Girl',     hint:'Young female',    st:12, voc:1.3,  hp:170, air:5, breath:0.35, filter:['peaking', 3600, 1, 3]},
+    man:      {name:'Man',      hint:'Natural male',    st:-6, voc:0.87, hp:20,  air:0, breath:0,    filter:['peaking', 160, 0.8, 3]},
+    boy:      {name:'Boy',      hint:'Young male',      st:5,  voc:1.12, hp:110, air:2, breath:0.1,  filter:['peaking', 2400, 1, 2]},
     kid:      {name:'Kid',      hint:'Small + bright',  st:7, filter:['highpass', 250, 0.7]},
     elder:    {name:'Old timer',hint:'Shaky voice',     st:-2, vib:[5.5, 0.025], filter:['bandpass', 1400, 0.4]},
   }],
@@ -379,7 +405,7 @@ const VOICES = Object.assign({}, ...VOICE_GROUPS.map(g => g[1]));
 
 const $ = s => document.querySelector(s);
 const PREFIX = 'masquerade-calls-v1-';
-let ctx, mic, shifter, vocoder, filter, shaper, shaperOut, trem, tremOsc, tremDepth, vibOsc, vibDepth, ring, ringOsc, echoDelay, echoFb, echoWet, master, monitorGain, analyser, outStream;
+let ctx, mic, shifter, vocoder, hp, air, breathGain, breathAmt, filter, shaper, shaperOut, trem, tremOsc, tremDepth, vibOsc, vibDepth, ring, ringOsc, echoDelay, echoFb, echoWet, master, monitorGain, analyser, outStream;
 let robotOn = false, muted = false;
 let peer, myCode = null, currentCall = null, incoming = null, timerInt = null, ringTimeout = null;
 
@@ -399,6 +425,19 @@ async function startAudio(){
   mic = ctx.createMediaStreamSource(stream);
   shifter = new AudioWorkletNode(ctx, 'pitch-shifter', {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
   vocoder = new AudioWorkletNode(ctx, 'vocoder', {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
+  hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 20; hp.Q.value = 0.7;
+  air = ctx.createBiquadFilter(); air.type = 'highshelf'; air.frequency.value = 5000; air.gain.value = 0;
+  // Breath: band-limited noise whose level follows the speaker's loudness.
+  const nbuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), nd = nbuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  const noise = ctx.createBufferSource(); noise.buffer = nbuf; noise.loop = true; noise.start();
+  const breathBand = ctx.createBiquadFilter(); breathBand.type = 'bandpass'; breathBand.frequency.value = 5000; breathBand.Q.value = 0.5;
+  breathGain = ctx.createGain(); breathGain.gain.value = 0;
+  const rect = ctx.createWaveShaper(); const rc = new Float32Array(1025);
+  for (let i = 0; i < rc.length; i++) rc[i] = Math.abs(i * 2 / (rc.length - 1) - 1); rect.curve = rc;
+  const follow = ctx.createBiquadFilter(); follow.type = 'lowpass'; follow.frequency.value = 18;
+  breathAmt = ctx.createGain(); breathAmt.gain.value = 0;
+  noise.connect(breathBand); breathBand.connect(breathGain);
   filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 20000; filter.Q.value = 0.7;
   shaper = ctx.createWaveShaper(); shaper.oversample = '2x';
   shaperOut = ctx.createGain();
@@ -418,7 +457,9 @@ async function startAudio(){
   const dest = ctx.createMediaStreamDestination();
 
   vibDepth.connect(shifter.parameters.get('pitch'));
-  mic.connect(shifter); shifter.connect(vocoder); vocoder.connect(filter); filter.connect(shaper); shaper.connect(shaperOut);
+  mic.connect(shifter); shifter.connect(vocoder); vocoder.connect(hp); hp.connect(air); air.connect(filter);
+  vocoder.connect(rect); rect.connect(follow); follow.connect(breathAmt); breathAmt.connect(breathGain.gain);
+  breathGain.connect(trem); filter.connect(shaper); shaper.connect(shaperOut);
   shaperOut.connect(trem); trem.connect(ring);
   ring.connect(master);
   ring.connect(echoDelay); echoDelay.connect(echoFb); echoFb.connect(echoDelay);
@@ -462,6 +503,9 @@ function applyVoice(v){
     shifter.parameters.get('pitch').setValueAtTime(Math.pow(2, st / 12), t);
   }
   setRobot(v.robot || 0);
+  hp.frequency.setTargetAtTime(v.hp || 20, t, 0.02);
+  air.gain.setTargetAtTime(v.air || 0, t, 0.02);
+  breathAmt.gain.setTargetAtTime((v.breath || 0) * 1.6, t, 0.03);
 
   const [ft, ff, fq, fg] = v.filter || ['lowpass', 20000, 0.7, 0];
   filter.type = ft; filter.frequency.setTargetAtTime(ff, t, 0.02); filter.Q.setTargetAtTime(fq, t, 0.02);
@@ -488,10 +532,37 @@ function applyVoice(v){
   $('#pitch').value = st;
   $('#pitchOut').textContent = (st > 0 ? '+' : st < 0 ? '−' : '') + Math.abs(st) + ' semitones';
 }
-function selectVoice(name){
-  document.querySelectorAll('.voice').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === name)));
-  applyVoice(name === 'custom' ? {st:+$('#pitch').value} : VOICES[name]);
+/* Per-voice tuning for the People voices, saved on this device. */
+let tweaks = {}; try { tweaks = JSON.parse(localStorage.getItem('voiceTweaks') || '{}') || {}; } catch(e){}
+let currentVoice = 'normal';
+function tuned(name){ return Object.assign({}, VOICES[name], tweaks[name] || {}); }
+function saveTweaks(){ try { localStorage.setItem('voiceTweaks', JSON.stringify(tweaks)); } catch(e){} }
+function showTune(name){
+  const v = VOICES[name], on = !!(v && v.voc);
+  $('#tunePanel').hidden = !on; $('#customSlider').hidden = on;
+  if (!on) return;
+  const t = tuned(name);
+  $('#tuneTitle').textContent = 'Tune ' + v.name;
+  $('#tPitch').value = t.st; $('#tShape').value = Math.round(t.voc * 100);
+  $('#tBreath').value = Math.round((t.breath || 0) * 100); $('#tAir').value = t.air || 0;
+  $('#tPitchOut').textContent = (t.st > 0 ? '+' : t.st < 0 ? '−' : '') + Math.abs(t.st) + ' semitones';
+  $('#tShapeOut').textContent = Math.round(t.voc * 100) + '%';
+  $('#tBreathOut').textContent = Math.round((t.breath || 0) * 100) + '%';
+  $('#tAirOut').textContent = '+' + (t.air || 0) + ' dB';
 }
+function selectVoice(name){
+  currentVoice = name;
+  document.querySelectorAll('.voice').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === name)));
+  applyVoice(name === 'custom' ? {st:+$('#pitch').value} : tuned(name));
+  showTune(name);
+}
+function onTune(){
+  const name = currentVoice; if (!VOICES[name] || !VOICES[name].voc) return;
+  tweaks[name] = {st:+$('#tPitch').value, voc:+$('#tShape').value / 100, breath:+$('#tBreath').value / 100, air:+$('#tAir').value};
+  saveTweaks(); applyVoice(tuned(name)); showTune(name);
+}
+['#tPitch', '#tShape', '#tBreath', '#tAir'].forEach(id => $(id).addEventListener('input', onTune));
+$('#tuneReset').addEventListener('click', () => { delete tweaks[currentVoice]; saveTweaks(); selectVoice(currentVoice); toast('Voice reset to default.'); });
 
 function drawMeter(){
   const data = new Uint8Array(analyser.fftSize);
