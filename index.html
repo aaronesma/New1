@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#5b3fd6">
+<title>Masquerade Calls</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout: one narrow column, phone first. Voice picker is the hero; call controls sit below it. */
+:root{
+  --bg:#f2f0f7; --surface:#ffffff; --fg:#1c1830; --muted:#68627f; --line:#dcd7ea;
+  --accent:#5b3fd6; --accent-soft:#e8e2ff; --accent-fg:#ffffff;
+  --ok:#17905a; --bad:#cf3449;
+  --display:"Bricolage Grotesque",system-ui,sans-serif;
+  --body:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#13111c; --surface:#1d1a29; --fg:#ece9f7; --muted:#a29cbc; --line:#2f2b42;
+    --accent:#9b85ff; --accent-soft:#2a2448; --accent-fg:#13111c;
+    --ok:#3ccf8e; --bad:#ff6b7f;
+    color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--fg); font:15px/1.5 var(--body);
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:max(24px,env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px)); padding-right:max(16px,env(safe-area-inset-right,0px));
+  min-height:100vh;
+}
+main{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:20px;padding-block:20px}
+h1{font:700 1.9rem/1.1 var(--display);margin:0;letter-spacing:-.01em;text-wrap:balance}
+h2{font:600 .75rem/1 var(--body);text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px}
+p{margin:0}
+.sub{color:var(--muted)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px}
+button{font:600 1rem var(--body);border:0;border-radius:12px;padding:14px 16px;cursor:pointer;color:inherit;background:var(--accent-soft)}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.5;cursor:not-allowed}
+.primary{background:var(--accent);color:var(--accent-fg)}
+.go{background:var(--ok);color:#fff}
+.stop{background:var(--bad);color:#fff}
+.wide{width:100%}
+
+.voices{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.voice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px;border:2px solid transparent;background:var(--bg);text-align:left}
+.voice b{font:700 1rem var(--display)}
+.voice small{color:var(--muted);font-weight:500;font-size:.75rem;font-variant-numeric:tabular-nums}
+.voice[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.slider{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.slider label{display:flex;justify-content:space-between;font-weight:500}
+.slider output{font-variant-numeric:tabular-nums;color:var(--muted)}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.toggle{display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--muted);font-size:.9rem}
+.toggle input{width:20px;height:20px;accent-color:var(--accent)}
+
+.meter{height:6px;border-radius:3px;background:var(--bg);overflow:hidden;margin-top:12px}
+.meter i{display:block;height:100%;width:0;background:var(--accent);transition:width .08s linear}
+
+.code{font:700 2.4rem/1 var(--display);letter-spacing:.12em;font-variant-numeric:tabular-nums}
+.codeRow{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+input[type=tel]{
+  flex:1;min-width:0;font:700 1.4rem var(--display);letter-spacing:.12em;padding:12px 14px;
+  border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--fg);
+}
+.status{display:flex;align-items:center;gap:8px;font-weight:500}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.dot.ok{background:var(--ok)} .dot.live{background:var(--bad);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.live{animation:none}.meter i{transition:none}}
+
+.ring{border-color:var(--ok);border-width:2px}
+.incall .code{font-size:1.6rem}
+.timer{font:700 2.6rem/1 var(--display);font-variant-numeric:tabular-nums}
+.note{font-size:.85rem;color:var(--muted)}
+#toast{position:fixed;left:50%;bottom:max(20px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:500;max-width:calc(100% - 32px)}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Masquerade Calls</h1>
+    <p class="sub">Voice calls in your browser, with your voice changed live.</p>
+  </header>
+
+  <!-- Step 1: microphone -->
+  <section id="startPanel" class="panel">
+    <h2>Get started</h2>
+    <p style="margin-bottom:14px">Turn on your microphone to pick a voice and get your call code. Headphones give the best sound.</p>
+    <button id="startBtn" class="primary wide">Turn on microphone</button>
+    <p id="startErr" class="note" style="margin-top:10px;color:var(--bad)" hidden></p>
+  </section>
+
+  <!-- Voice picker -->
+  <section id="voicePanel" class="panel" hidden>
+    <h2>Your voice</h2>
+    <div class="voices" id="voices">
+      <button class="voice" data-v="normal" aria-pressed="true"><b>Normal</b><small>0 st</small></button>
+      <button class="voice" data-v="deep" aria-pressed="false"><b>Deep</b><small>−6 st</small></button>
+      <button class="voice" data-v="giant" aria-pressed="false"><b>Giant</b><small>−10 st</small></button>
+      <button class="voice" data-v="high" aria-pressed="false"><b>High</b><small>+5 st</small></button>
+      <button class="voice" data-v="chipmunk" aria-pressed="false"><b>Chipmunk</b><small>+10 st</small></button>
+      <button class="voice" data-v="robot" aria-pressed="false"><b>Robot</b><small>ring mod</small></button>
+      <button class="voice" data-v="cave" aria-pressed="false"><b>Cave</b><small>−2 st + echo</small></button>
+      <button class="voice" data-v="alien" aria-pressed="false"><b>Alien</b><small>+7 st + robot</small></button>
+      <button class="voice" data-v="custom" aria-pressed="false"><b>Custom</b><small>slider</small></button>
+    </div>
+    <div class="slider">
+      <label for="pitch">Pitch <output id="pitchOut">0 semitones</output></label>
+      <input id="pitch" type="range" min="-12" max="12" step="1" value="0">
+    </div>
+    <label class="toggle"><input id="monitor" type="checkbox"> Hear myself (use headphones)</label>
+    <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+  </section>
+
+  <!-- Idle: my code + dial -->
+  <section id="dialPanel" class="panel" hidden>
+    <h2>Your call code</h2>
+    <div class="codeRow">
+      <span class="code" id="myCode">······</span>
+      <button id="shareBtn" disabled>Copy invite link</button>
+    </div>
+    <div class="status" style="margin-top:10px"><span class="dot" id="netDot"></span><span id="netStatus">Connecting…</span></div>
+
+    <h2 style="margin-top:22px">Call someone</h2>
+    <form id="dialForm" class="row">
+      <input id="dialCode" type="tel" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="6-digit code" aria-label="Their call code" autocomplete="off">
+      <button id="callBtn" class="go" type="submit" disabled>Call</button>
+    </form>
+    <p class="note" style="margin-top:10px">The other person opens this same page and tells you their code, or you send them your invite link.</p>
+  </section>
+
+  <!-- Incoming -->
+  <section id="ringPanel" class="panel ring" hidden>
+    <h2>Incoming call</h2>
+    <p class="code" id="ringFrom" style="font-size:1.6rem;margin-bottom:14px"></p>
+    <div class="row">
+      <button id="answerBtn" class="go" style="flex:1">Answer</button>
+      <button id="declineBtn" class="stop" style="flex:1">Decline</button>
+    </div>
+  </section>
+
+  <!-- In call -->
+  <section id="callPanel" class="panel incall" hidden>
+    <h2 id="callLabel">Calling</h2>
+    <p class="code" id="callWith"></p>
+    <p class="timer" id="timer" style="margin:12px 0">0:00</p>
+    <div class="status" style="margin-bottom:14px"><span class="dot live"></span><span id="callStatus">Ringing…</span></div>
+    <div class="row">
+      <button id="muteBtn" style="flex:1" aria-pressed="false">Mute</button>
+      <button id="hangBtn" class="stop" style="flex:1">Hang up</button>
+    </div>
+    <p class="note" style="margin-top:12px">You can switch voices during the call. The other person hears the change right away.</p>
+  </section>
+</main>
+<div id="toast" role="status" hidden></div>
+<audio id="remote" autoplay playsinline></audio>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+/* ---------- Audio worklet: real-time granular pitch shifter ---------- */
+const WORKLET = `
+class PitchShifter extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [{name:'pitch',defaultValue:1,minValue:0.25,maxValue:4,automationRate:'k-rate'}]; }
+  constructor(){
+    super();
+    this.N = 16384; this.buf = new Float32Array(this.N); this.w = 0;
+    this.W = Math.round(sampleRate * 0.045); // ~45 ms grain
+    this.phase = 0;
+  }
+  read(d){
+    let pos = this.w - d; while (pos < 0) pos += this.N;
+    const i = Math.floor(pos), f = pos - i, j = (i + 1) % this.N;
+    return this.buf[i] * (1 - f) + this.buf[j] * f;
+  }
+  process(inputs, outputs, params){
+    const inp = inputs[0] && inputs[0][0];
+    const out = outputs[0];
+    if (!inp) return true;
+    const p = params.pitch[0];
+    const o = out[0];
+    if (Math.abs(p - 1) < 1e-3){
+      for (let i = 0; i < inp.length; i++){ this.buf[this.w] = inp[i]; this.w = (this.w + 1) % this.N; o[i] = inp[i]; }
+    } else {
+      const step = (1 - p) / this.W, W = this.W;
+      for (let i = 0; i < inp.length; i++){
+        this.buf[this.w] = inp[i];
+        this.phase += step; this.phase -= Math.floor(this.phase);
+        const ph2 = (this.phase + 0.5) % 1;
+        const g1 = Math.sin(Math.PI * this.phase), g2 = Math.sin(Math.PI * ph2);
+        o[i] = this.read(this.phase * W + 2) * g1 + this.read(ph2 * W + 2) * g2;
+        this.w = (this.w + 1) % this.N;
+      }
+    }
+    for (let c = 1; c < out.length; c++) out[c].set(o);
+    return true;
+  }
+}
+registerProcessor('pitch-shifter', PitchShifter);`;
+
+const VOICES = {
+  normal:   {st:0},
+  deep:     {st:-6},
+  giant:    {st:-10},
+  high:     {st:5},
+  chipmunk: {st:10},
+  robot:    {st:-1, robot:true},
+  cave:     {st:-2, echo:0.45},
+  alien:    {st:7, robot:true, echo:0.2},
+  custom:   null
+};
+
+const $ = s => document.querySelector(s);
+const PREFIX = 'masquerade-calls-v1-';
+let ctx, mic, shifter, ring, ringOsc, echoDelay, echoFb, echoWet, master, monitorGain, analyser, outStream;
+let robotOn = false, muted = false;
+let peer, myCode = null, currentCall = null, incoming = null, timerInt = null, ringTimeout = null;
+
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.hidden = true, 3200);
+}
+function show(id, on){ $(id).hidden = !on; }
+
+/* ---------- Audio graph ---------- */
+async function startAudio(){
+  const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}});
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const url = URL.createObjectURL(new Blob([WORKLET], {type:'application/javascript'}));
+  await ctx.audioWorklet.addModule(url);
+
+  mic = ctx.createMediaStreamSource(stream);
+  shifter = new AudioWorkletNode(ctx, 'pitch-shifter', {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
+  ring = ctx.createGain(); ring.gain.value = 1;
+  ringOsc = ctx.createOscillator(); ringOsc.type = 'sine'; ringOsc.frequency.value = 50; ringOsc.start();
+  echoDelay = ctx.createDelay(1); echoDelay.delayTime.value = 0.23;
+  echoFb = ctx.createGain(); echoFb.gain.value = 0;
+  echoWet = ctx.createGain(); echoWet.gain.value = 0;
+  master = ctx.createGain(); master.gain.value = 1;
+  monitorGain = ctx.createGain(); monitorGain.gain.value = 0;
+  analyser = ctx.createAnalyser(); analyser.fftSize = 512;
+  const dest = ctx.createMediaStreamDestination();
+
+  mic.connect(shifter); shifter.connect(ring);
+  ring.connect(master);
+  ring.connect(echoDelay); echoDelay.connect(echoFb); echoFb.connect(echoDelay);
+  echoDelay.connect(echoWet); echoWet.connect(master);
+  master.connect(dest); master.connect(analyser);
+  master.connect(monitorGain); monitorGain.connect(ctx.destination);
+
+  outStream = dest.stream;
+  drawMeter();
+}
+
+function setRobot(on){
+  if (on === robotOn) return;
+  robotOn = on;
+  if (on){ ring.gain.value = 0; ringOsc.connect(ring.gain); }
+  else { ringOsc.disconnect(); ring.gain.value = 1; }
+}
+function applyVoice(v){
+  const t = ctx.currentTime;
+  shifter.parameters.get('pitch').setValueAtTime(Math.pow(2, v.st / 12), t);
+  setRobot(!!v.robot);
+  const e = v.echo || 0;
+  echoWet.gain.setTargetAtTime(e, t, 0.02);
+  echoFb.gain.setTargetAtTime(e * 0.75, t, 0.02);
+  $('#pitch').value = v.st;
+  $('#pitchOut').textContent = (v.st > 0 ? '+' : v.st < 0 ? '−' : '') + Math.abs(v.st) + ' semitones';
+}
+function selectVoice(name){
+  document.querySelectorAll('.voice').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === name)));
+  if (name === 'custom') applyVoice({st:+$('#pitch').value});
+  else applyVoice(VOICES[name]);
+}
+
+function drawMeter(){
+  const data = new Uint8Array(analyser.fftSize);
+  const bar = $('#meter');
+  (function loop(){
+    analyser.getByteTimeDomainData(data);
+    let peak = 0; for (const x of data) peak = Math.max(peak, Math.abs(x - 128));
+    bar.style.width = Math.min(100, peak / 128 * 180) + '%';
+    requestAnimationFrame(loop);
+  })();
+}
+
+/* ---------- Calling (WebRTC via PeerJS) ---------- */
+function setNet(text, ok){ $('#netStatus').textContent = text; $('#netDot').className = 'dot' + (ok ? ' ok' : ''); }
+function fmt(code){ return code.slice(0,3) + ' ' + code.slice(3); }
+
+function initPeer(){
+  myCode = String(Math.floor(100000 + Math.random() * 900000));
+  $('#myCode').textContent = fmt(myCode);
+  setNet('Connecting…', false);
+  // ?server=host:port points at a self-hosted PeerJS server (used for local testing).
+  const srv = new URLSearchParams(location.search).get('server');
+  const opts = {debug:0};
+  if (srv){ const [h, port] = srv.split(':'); Object.assign(opts, {host:h, port:+port || 9000, path:'/', secure:location.protocol === 'https:'}); }
+  peer = new Peer(PREFIX + myCode, opts);
+  peer.on('open', () => {
+    setNet('Ready for calls', true);
+    $('#callBtn').disabled = false; $('#shareBtn').disabled = false;
+    const pre = new URLSearchParams(location.search).get('call');
+    if (pre && /^\d{6}$/.test(pre) && pre !== myCode && !$('#dialCode').value) $('#dialCode').value = pre;
+  });
+  peer.on('disconnected', () => { setNet('Reconnecting…', false); try { peer.reconnect(); } catch(e){} });
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id'){ peer.destroy(); initPeer(); return; }
+    if (err.type === 'peer-unavailable'){ toast('Nobody is using that code right now. Check the number.'); endCall(); return; }
+    if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error'){ setNet('Connection problem. Retrying…', false); return; }
+    toast('Call problem: ' + err.type);
+  });
+  peer.on('call', call => {
+    if (currentCall || incoming){ call.close(); return; }
+    incoming = call;
+    $('#ringFrom').textContent = fmt(call.peer.replace(PREFIX, ''));
+    show('#ringPanel', true); show('#dialPanel', false);
+    call.on('close', () => { if (incoming === call){ incoming = null; show('#ringPanel', false); show('#dialPanel', true); } });
+  });
+}
+
+function attachCall(call, label){
+  currentCall = call;
+  $('#callLabel').textContent = label;
+  $('#callWith').textContent = fmt(call.peer.replace(PREFIX, ''));
+  $('#callStatus').textContent = label === 'Calling' ? 'Ringing…' : 'Connecting…';
+  $('#timer').textContent = '0:00';
+  show('#dialPanel', false); show('#ringPanel', false); show('#callPanel', true);
+  clearTimeout(ringTimeout);
+  ringTimeout = setTimeout(() => { if (currentCall === call && !timerInt){ toast('No answer.'); endCall(); } }, 40000);
+
+  call.on('stream', remote => {
+    const a = $('#remote'); a.srcObject = remote; a.play().catch(() => {});
+    if (timerInt) return;
+    clearTimeout(ringTimeout);
+    $('#callStatus').textContent = 'Connected';
+    $('#callLabel').textContent = 'In call with';
+    const start = Date.now();
+    timerInt = setInterval(() => {
+      const s = Math.floor((Date.now() - start) / 1000);
+      $('#timer').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }, 500);
+  });
+  call.on('close', () => { if (currentCall === call){ toast('Call ended.'); endCall(); } });
+  call.on('error', () => { if (currentCall === call){ toast('The call dropped.'); endCall(); } });
+  const pc = call.peerConnection;
+  if (pc) pc.addEventListener('iceconnectionstatechange', () => {
+    if (pc.iceConnectionState === 'failed' && currentCall === call){
+      toast('Could not connect. One of the networks may be blocking direct calls; try WiFi.');
+      endCall();
+    }
+  });
+}
+
+function endCall(){
+  const c = currentCall; currentCall = null;
+  if (c) try { c.close(); } catch(e){}
+  clearInterval(timerInt); timerInt = null; clearTimeout(ringTimeout);
+  $('#remote').srcObject = null;
+  show('#callPanel', false); show('#ringPanel', false); show('#dialPanel', true);
+}
+
+/* ---------- UI wiring ---------- */
+$('#startBtn').addEventListener('click', async () => {
+  $('#startBtn').disabled = true; $('#startErr').hidden = true;
+  try {
+    await startAudio();
+    show('#startPanel', false); show('#voicePanel', true); show('#dialPanel', true);
+    if (typeof Peer === 'undefined'){ setNet('Calling service did not load. Refresh the page.', false); return; }
+    initPeer();
+  } catch(e){
+    $('#startBtn').disabled = false;
+    const err = $('#startErr'); err.hidden = false;
+    err.textContent = e && e.name === 'NotAllowedError'
+      ? 'Microphone access was blocked. Allow it in your browser’s site settings, then try again.'
+      : 'Could not start audio: ' + (e && e.message || e);
+  }
+});
+
+$('#voices').addEventListener('click', e => {
+  const b = e.target.closest('.voice'); if (b) selectVoice(b.dataset.v);
+});
+$('#pitch').addEventListener('input', () => selectVoice('custom'));
+$('#monitor').addEventListener('change', e => monitorGain.gain.setTargetAtTime(e.target.checked ? 1 : 0, ctx.currentTime, 0.02));
+
+$('#dialCode').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); });
+$('#dialForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const code = $('#dialCode').value;
+  if (!/^\d{6}$/.test(code)){ toast('Enter the 6-digit code.'); return; }
+  if (code === myCode){ toast('That’s your own code.'); return; }
+  if (ctx.state === 'suspended') ctx.resume();
+  attachCall(peer.call(PREFIX + code, outStream), 'Calling');
+});
+$('#answerBtn').addEventListener('click', () => {
+  const call = incoming; incoming = null; if (!call) return;
+  if (ctx.state === 'suspended') ctx.resume();
+  call.answer(outStream);
+  attachCall(call, 'In call with');
+});
+$('#declineBtn').addEventListener('click', () => {
+  const call = incoming; incoming = null; if (call) call.close();
+  show('#ringPanel', false); show('#dialPanel', true);
+});
+$('#hangBtn').addEventListener('click', endCall);
+$('#muteBtn').addEventListener('click', e => {
+  muted = !muted;
+  master.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.01);
+  e.target.textContent = muted ? 'Unmute' : 'Mute';
+  e.target.setAttribute('aria-pressed', String(muted));
+});
+$('#shareBtn').addEventListener('click', async () => {
+  const link = location.origin + location.pathname + '?call=' + myCode;
+  try { await navigator.clipboard.writeText(link); toast('Invite link copied.'); }
+  catch(e){ toast(link); }
+});
+document.addEventListener('visibilitychange', () => { if (ctx && ctx.state === 'suspended' && !document.hidden) ctx.resume(); });
+</script>
+</body>
+</html>
