@@ -5,7 +5,7 @@ Browser voice calls with a live voice changer. Open the page, turn on the microp
 ## Voices
 - **Pitch:** Normal, Low (−3 semitones), Deep (−6), Giant (−10), High (+5), Chipmunk (+10)
 - **People:** Woman, Girl, Man, Boy, Kid, Old timer
-- **Characters:** Robot, Cyborg, Alien, Monster, Villain, Ghost, Wobble, Underwater, Announcer
+- **Characters:** Robot, Cyborg, Alien, Monster, Villain, Ghost, Wobble, Underwater, Announcer, Batman, Narrator, Brute
 - **Effects:** Radio, Old phone, Megaphone, Cave, Stadium, Fan
 - **Custom pitch** slider (−12 to +12 semitones)
 

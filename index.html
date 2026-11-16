@@ -443,6 +443,9 @@ const VOICE_GROUPS = [
     wobble:   {name:'Wobble',   hint:'Pitch swoops',    st:0, vib:[1.1, 0.12]},
     underwater:{name:'Underwater',hint:'Muffled bubbles',st:-3, filter:['lowpass', 450, 1.2], vib:[3, 0.04]},
     announcer:{name:'Announcer',hint:'Big + booming',   st:-3, filter:['peaking', 180, 0.8, 7], echo:0.22, delay:0.12},
+    batman:   {name:'Batman',   hint:'Gravelly growl',  st:-4, voc:0.84, hp:60,  air:0, breath:0.3, dist:0.3, trem:[38, 0.3], filter:['peaking', 140, 0.8, 5]},
+    narrator: {name:'Narrator', hint:'Deep + warm',     st:-3, voc:0.9,  hp:60,  air:1, breath:0,   filter:['peaking', 150, 0.8, 4], echo:0.1, delay:0.05},
+    brute:    {name:'Brute',    hint:'Huge + rough',    st:-8, voc:0.8,  hp:50,  air:0, breath:0.15, dist:0.5, filter:['lowpass', 3000, 0.7]},
   }],
   ['Effects', {
     radio:    {name:'Radio',    hint:'Walkie-talkie',   filter:['bandpass', 1800, 1.4], dist:0.55},
