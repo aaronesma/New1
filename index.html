@@ -143,17 +143,21 @@ button.small{padding:6px 12px;font-size:.85rem;border-radius:8px}
       </div>
       <div class="slider">
         <label for="tShape">Voice shape <output id="tShapeOut"></output></label>
-        <input id="tShape" type="range" min="80" max="140" step="1">
+        <input id="tShape" type="range" min="65" max="140" step="1">
       </div>
       <div class="slider">
         <label for="tBreath">Breathiness <output id="tBreathOut"></output></label>
         <input id="tBreath" type="range" min="0" max="100" step="5">
       </div>
       <div class="slider">
+        <label for="tGrowl">Growl <output id="tGrowlOut"></output></label>
+        <input id="tGrowl" type="range" min="0" max="100" step="5">
+      </div>
+      <div class="slider">
         <label for="tAir">Brightness <output id="tAirOut"></output></label>
         <input id="tAir" type="range" min="0" max="10" step="1">
       </div>
-      <p class="note">Higher pitch and shape sound more feminine. Shape above about 130% starts to sound cartoonish. Your settings are saved on this device.</p>
+      <p class="note">Lower pitch and shape sound bigger and deeper; higher sounds more feminine. Shape far from 100% starts to sound cartoonish. Growl adds gravel. Your settings are saved on this device.</p>
     </div>
     <div class="slider" id="customSlider">
       <label for="pitch">Custom pitch <output id="pitchOut">0 semitones</output></label>
@@ -415,7 +419,7 @@ class Vocoder extends AudioWorkletProcessor {
 registerProcessor('vocoder', Vocoder);`;
 
 /* Each voice: st = pitch in semitones; robot = ring-mod Hz; echo = amount (0-1), delay = seconds;
-   filter = [type, Hz, Q, gain dB]; dist = distortion (0-1); voc = formant shift ratio (enables natural pitch shifting); hp = low cut Hz; air = treble boost dB; breath = 0-1; trem = [Hz, depth]; vib = [Hz, depth in pitch ratio]. */
+   filter = [type, Hz, Q, gain dB]; dist = distortion (0-1); voc = formant shift ratio (enables natural pitch shifting); hp = low cut Hz; air = treble boost dB; breath = 0-1; trem = [Hz, depth]; growl = 0-1 rough throat; ls = [Hz, dB] low shelf; lp = low-pass Hz; bf = breath centre Hz; comp = [threshold dB, ratio, makeup dB]; vib = [Hz, depth in pitch ratio]. */
 const VOICE_GROUPS = [
   ['Pitch', {
     normal:   {name:'Normal',   hint:'Your voice',      st:0},
@@ -443,7 +447,10 @@ const VOICE_GROUPS = [
     wobble:   {name:'Wobble',   hint:'Pitch swoops',    st:0, vib:[1.1, 0.12]},
     underwater:{name:'Underwater',hint:'Muffled bubbles',st:-3, filter:['lowpass', 450, 1.2], vib:[3, 0.04]},
     announcer:{name:'Announcer',hint:'Big + booming',   st:-3, filter:['peaking', 180, 0.8, 7], echo:0.22, delay:0.12},
-    batman:   {name:'Batman',   hint:'Gravelly growl',  st:-4, voc:0.84, hp:60,  air:0, breath:0.3, dist:0.3, trem:[38, 0.3], filter:['peaking', 140, 0.8, 5]},
+    // Big chest, low pitch, irregular throat growl, low raspy breath, dark top, heavily compressed.
+    // No distortion: on a bass-heavy voice it smears the words into hiss; the growl supplies the grit.
+    batman:   {name:'Batman',   hint:'Deep gravel',     st:-8, voc:0.8, hp:55, air:0, breath:0.35, bf:1800, growl:0.8,
+               ls:[230, 7], filter:['peaking', 700, 1.2, -4], lp:5200, comp:[-30, 6, 6]},
     narrator: {name:'Narrator', hint:'Deep + warm',     st:-3, voc:0.9,  hp:60,  air:1, breath:0,   filter:['peaking', 150, 0.8, 4], echo:0.1, delay:0.05},
     brute:    {name:'Brute',    hint:'Huge + rough',    st:-8, voc:0.8,  hp:50,  air:0, breath:0.15, dist:0.5, filter:['lowpass', 3000, 0.7]},
   }],
@@ -484,6 +491,17 @@ async function startAudio(){
     ctx = new AC({latencyHint:'balanced'});
     mic = ctx.createMediaStreamSource(stream);
   }
+  const dest = ctx.createMediaStreamDestination();
+  await setupGraph(ctx, mic, dest);
+  limiter.connect(monitorGain); monitorGain.connect(ctx.destination);
+  outStream = dest.stream;
+  drawMeter();
+}
+
+/* Builds the whole voice chain from src to out. Used live, and offline to render test samples. */
+let limiter, lowShelf, darkLp, comp, compMakeup, growl, growlAmt, breathBand, breathSoft;
+async function setupGraph(c, src, out){
+  ctx = c;
   const url = URL.createObjectURL(new Blob([WORKLET], {type:'application/javascript'}));
   await ctx.audioWorklet.addModule(url);
 
@@ -495,8 +513,8 @@ async function startAudio(){
   const nbuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate), nd = nbuf.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
   const noise = ctx.createBufferSource(); noise.buffer = nbuf; noise.loop = true; noise.start();
-  const breathBand = ctx.createBiquadFilter(); breathBand.type = 'bandpass'; breathBand.frequency.value = 3500; breathBand.Q.value = 0.7;
-  const breathSoft = ctx.createBiquadFilter(); breathSoft.type = 'lowpass'; breathSoft.frequency.value = 6000;
+  breathBand = ctx.createBiquadFilter(); breathBand.type = 'bandpass'; breathBand.frequency.value = 3500; breathBand.Q.value = 0.7;
+  breathSoft = ctx.createBiquadFilter(); breathSoft.type = 'lowpass'; breathSoft.frequency.value = 6000;
   breathGain = ctx.createGain(); breathGain.gain.value = 0;
   const rect = ctx.createWaveShaper(); const rc = new Float32Array(1025);
   for (let i = 0; i < rc.length; i++) rc[i] = Math.abs(i * 2 / (rc.length - 1) - 1); rect.curve = rc;
@@ -519,24 +537,38 @@ async function startAudio(){
   master = ctx.createGain(); master.gain.value = 1;
   monitorGain = ctx.createGain(); monitorGain.gain.value = 0;
   analyser = ctx.createAnalyser(); analyser.fftSize = 512;
-  const dest = ctx.createMediaStreamDestination();
+  // Chest and darkness: low shelf for body, low-pass to take the edge off.
+  lowShelf = ctx.createBiquadFilter(); lowShelf.type = 'lowshelf'; lowShelf.frequency.value = 220; lowShelf.gain.value = 0;
+  darkLp = ctx.createBiquadFilter(); darkLp.type = 'lowpass'; darkLp.frequency.value = ctx.sampleRate / 2 - 100; darkLp.Q.value = 0.6;
+  // Voice compressor: off by default (threshold 0 dB); heavy for close-mic voices like Batman.
+  comp = ctx.createDynamicsCompressor(); comp.threshold.value = 0; comp.ratio.value = 1; comp.knee.value = 6;
+  comp.attack.value = 0.004; comp.release.value = 0.12;
+  compMakeup = ctx.createGain(); compMakeup.gain.value = 1;
+  // Growl: irregular amplitude roughness from slow-ish random noise (25-75 Hz), like a rough throat.
+  // Unlike a steady tremolo this has no single buzz frequency, so it reads as gravel, not a fan.
+  growl = ctx.createGain(); growl.gain.value = 1;
+  const gbuf = ctx.createBuffer(1, ctx.sampleRate * 3, ctx.sampleRate), gd = gbuf.getChannelData(0);
+  for (let i = 0; i < gd.length; i++) gd[i] = Math.random() * 2 - 1;
+  const gnoise = ctx.createBufferSource(); gnoise.buffer = gbuf; gnoise.loop = true; gnoise.start();
+  const gHp = ctx.createBiquadFilter(); gHp.type = 'highpass'; gHp.frequency.value = 25;
+  const gLp = ctx.createBiquadFilter(); gLp.type = 'lowpass'; gLp.frequency.value = 75;
+  growlAmt = ctx.createGain(); growlAmt.gain.value = 0;
+  gnoise.connect(gHp); gHp.connect(gLp); gLp.connect(growlAmt); growlAmt.connect(growl.gain);
 
   vibDepth.connect(shifter.parameters.get('pitch'));
-  mic.connect(shifter); shifter.connect(vocoder); vocoder.connect(hp); hp.connect(air); air.connect(filter);
+  src.connect(shifter); shifter.connect(vocoder); vocoder.connect(hp); hp.connect(lowShelf); lowShelf.connect(air); air.connect(filter);
   vocoder.connect(rect); rect.connect(follow); follow.connect(breathAmt); breathAmt.connect(breathGain.gain);
-  breathGain.connect(trem); filter.connect(shaper); shaper.connect(shaperOut);
-  shaperOut.connect(trem); trem.connect(ring);
+  // darkLp sits after the distortion so it also removes the fizz the distortion creates.
+  filter.connect(shaper); shaper.connect(shaperOut); shaperOut.connect(darkLp);
+  breathGain.connect(darkLp); darkLp.connect(comp); comp.connect(compMakeup); compMakeup.connect(growl);
+  growl.connect(trem); trem.connect(ring);
   ring.connect(master);
   ring.connect(echoDelay); echoDelay.connect(echoFb); echoFb.connect(echoDelay);
   echoDelay.connect(echoWet); echoWet.connect(master);
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -6; limiter.knee.value = 4; limiter.ratio.value = 12;
-  limiter.attack.value = 0.003; limiter.release.value = 0.15;
-  master.connect(limiter); limiter.connect(dest); limiter.connect(analyser);
-  limiter.connect(monitorGain); monitorGain.connect(ctx.destination);
-
-  outStream = dest.stream;
-  drawMeter();
+  limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -8; limiter.knee.value = 2; limiter.ratio.value = 20;
+  limiter.attack.value = 0.001; limiter.release.value = 0.15;
+  master.connect(limiter); limiter.connect(out); limiter.connect(analyser);
 }
 
 function setRobot(hz){
@@ -570,7 +602,18 @@ function applyVoice(v){
   setRobot(v.robot || 0);
   hp.frequency.setTargetAtTime(v.hp || 20, t, 0.02);
   air.gain.setTargetAtTime(v.air || 0, t, 0.02);
-  breathAmt.gain.setTargetAtTime((v.breath || 0) * 1.6, t, 0.03);
+  breathAmt.gain.setTargetAtTime((v.breath || 0) * 0.35, t, 0.03); // calibrated on speech: 100% sits well under the voice
+  const bf = v.bf || 3500;
+  breathBand.frequency.setTargetAtTime(bf, t, 0.02); breathSoft.frequency.setTargetAtTime(Math.min(bf * 1.7, ctx.sampleRate / 2 - 100), t, 0.02);
+  const [lsF, lsG] = v.ls || [220, 0];
+  lowShelf.frequency.setTargetAtTime(lsF, t, 0.02); lowShelf.gain.setTargetAtTime(lsG, t, 0.02);
+  darkLp.frequency.setTargetAtTime(Math.min(v.lp || 20000, ctx.sampleRate / 2 - 100), t, 0.02);
+  const [cT, cR, cM] = v.comp || [0, 1, 0];
+  comp.threshold.setTargetAtTime(cT, t, 0.02); comp.ratio.setTargetAtTime(cR, t, 0.02);
+  compMakeup.gain.setTargetAtTime(Math.pow(10, cM / 20), t, 0.02);
+  // growl noise after band-limiting has rms ~0.04; scale so 100% gives roughly ±45% level roughness
+  const gr = v.growl || 0;
+  growlAmt.gain.setTargetAtTime(gr * 11, t, 0.03); growl.gain.setTargetAtTime(1, t, 0.02);
 
   const [ft, ff, fq, fg] = v.filter || ['lowpass', 20000, 0.7, 0];
   filter.type = ft; filter.frequency.setTargetAtTime(ff, t, 0.02); filter.Q.setTargetAtTime(fq, t, 0.02);
@@ -598,10 +641,10 @@ function applyVoice(v){
   $('#pitchOut').textContent = (st > 0 ? '+' : st < 0 ? '−' : '') + Math.abs(st) + ' semitones';
 }
 /* Per-voice tuning for the People voices, saved on this device. */
-let tweaks = {}; try { tweaks = JSON.parse(localStorage.getItem('voiceTweaks') || '{}') || {}; } catch(e){}
+let tweaks = {}; try { tweaks = JSON.parse(localStorage.getItem('voiceTweaks2') || '{}') || {}; } catch(e){}
 let currentVoice = 'normal';
 function tuned(name){ return Object.assign({}, VOICES[name], tweaks[name] || {}); }
-function saveTweaks(){ try { localStorage.setItem('voiceTweaks', JSON.stringify(tweaks)); } catch(e){} }
+function saveTweaks(){ try { localStorage.setItem('voiceTweaks2', JSON.stringify(tweaks)); } catch(e){} }
 function showTune(name){
   const v = VOICES[name], on = !!(v && v.voc);
   $('#tunePanel').hidden = !on; $('#customSlider').hidden = on;
@@ -610,6 +653,7 @@ function showTune(name){
   $('#tuneTitle').textContent = 'Tune ' + v.name;
   $('#tPitch').value = t.st; $('#tShape').value = Math.round(t.voc * 100);
   $('#tBreath').value = Math.round((t.breath || 0) * 100); $('#tAir').value = t.air || 0;
+  $('#tGrowl').value = Math.round((t.growl || 0) * 100); $('#tGrowlOut').textContent = Math.round((t.growl || 0) * 100) + '%';
   $('#tPitchOut').textContent = (t.st > 0 ? '+' : t.st < 0 ? '−' : '') + Math.abs(t.st) + ' semitones';
   $('#tShapeOut').textContent = Math.round(t.voc * 100) + '%';
   $('#tBreathOut').textContent = Math.round((t.breath || 0) * 100) + '%';
@@ -623,10 +667,10 @@ function selectVoice(name){
 }
 function onTune(){
   const name = currentVoice; if (!VOICES[name] || !VOICES[name].voc) return;
-  tweaks[name] = {st:+$('#tPitch').value, voc:+$('#tShape').value / 100, breath:+$('#tBreath').value / 100, air:+$('#tAir').value};
+  tweaks[name] = {st:+$('#tPitch').value, voc:+$('#tShape').value / 100, breath:+$('#tBreath').value / 100, air:+$('#tAir').value, growl:+$('#tGrowl').value / 100};
   saveTweaks(); applyVoice(tuned(name)); showTune(name);
 }
-['#tPitch', '#tShape', '#tBreath', '#tAir'].forEach(id => $(id).addEventListener('input', onTune));
+['#tPitch', '#tShape', '#tBreath', '#tGrowl', '#tAir'].forEach(id => $(id).addEventListener('input', onTune));
 $('#tuneReset').addEventListener('click', () => { delete tweaks[currentVoice]; saveTweaks(); selectVoice(currentVoice); toast('Voice reset to default.'); });
 
 function drawMeter(){

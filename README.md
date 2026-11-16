@@ -9,7 +9,7 @@ Browser voice calls with a live voice changer. Open the page, turn on the microp
 - **Effects:** Radio, Old phone, Megaphone, Cave, Stadium, Fan
 - **Custom pitch** slider (−12 to +12 semitones)
 
-Voices can be switched during a call. People voices have a **Tune** panel (pitch, voice shape, breathiness, brightness); settings are saved on the device.
+Voices can be switched during a call. People voices and Batman have a **Tune** panel (pitch, voice shape, breathiness, growl, brightness); settings are saved on the device.
 
 ## Put it online (free, GitHub Pages)
 1. On GitHub, open this repo → **Settings → Pages**.
