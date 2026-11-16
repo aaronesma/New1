@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#5b3fd6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Masquerade">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <title>Masquerade Calls</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -80,6 +87,9 @@ input[type=tel]{
 .incall .code{font-size:1.6rem}
 .timer{font:700 2.6rem/1 var(--display);font-variant-numeric:tabular-nums}
 .note{font-size:.85rem;color:var(--muted)}
+.installRow{display:flex;gap:12px;align-items:center}
+.installRow img{border-radius:11px;flex:none}
+.shareGlyph{display:inline-block;vertical-align:-2px;color:var(--accent)}
 #toast{position:fixed;left:50%;bottom:max(20px,env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:500;max-width:calc(100% - 32px)}
 </style>
 </head>
@@ -89,6 +99,18 @@ input[type=tel]{
     <h1>Masquerade Calls</h1>
     <p class="sub">Voice calls in your browser, with your voice changed live.</p>
   </header>
+
+  <!-- iPhone install hint (Safari only, hidden once installed) -->
+  <section id="installPanel" class="panel install" hidden>
+    <div class="installRow">
+      <img src="icons/icon-192.png" alt="" width="48" height="48">
+      <div>
+        <p style="font-weight:600">Install on your iPhone</p>
+        <p class="note">Tap the Share button <svg class="shareGlyph" aria-label="Share" width="14" height="17" viewBox="0 0 14 17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1v10M3.5 4.5 7 1l3.5 3.5M4.5 7H2v9h10V7H9.5"/></svg> in Safari, then <b>Add to Home Screen</b>.</p>
+      </div>
+    </div>
+    <button id="installDismiss" class="wide" style="margin-top:12px;padding:10px">Not now</button>
+  </section>
 
   <!-- Step 1: microphone -->
   <section id="startPanel" class="panel">
@@ -422,6 +444,15 @@ $('#shareBtn').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(link); toast('Invite link copied.'); }
   catch(e){ toast(link); }
 });
+/* ---------- Installable app ---------- */
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+(function installHint(){
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  let dismissed = false; try { dismissed = localStorage.getItem('installDismissed') === '1'; } catch(e){}
+  if (ios && !standalone && !dismissed) show('#installPanel', true);
+  $('#installDismiss').addEventListener('click', () => { show('#installPanel', false); try { localStorage.setItem('installDismissed', '1'); } catch(e){} });
+})();
 document.addEventListener('visibilitychange', () => { if (ctx && ctx.state === 'suspended' && !document.hidden) ctx.resume(); });
 </script>
 </body>
