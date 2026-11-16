@@ -55,9 +55,14 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .stop{background:var(--bad);color:#fff}
 .wide{width:100%}
 
-.voices{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.vgroup+.vgroup{margin-top:14px}
+.vgroup h3{font:600 .8rem var(--body);color:var(--muted);margin:0 0 8px}
+.voices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .voice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:12px;border:2px solid transparent;background:var(--bg);text-align:left}
-.voice b{font:700 1rem var(--display)}
+.voice{padding:10px}
+.voice b{font:700 clamp(.7rem,3.2vw,.95rem) var(--display);white-space:nowrap}
+.voice small{font-size:clamp(.66rem,2.9vw,.75rem)}
+@media (max-width:380px){.panel{padding:12px}.voices{gap:6px}.voice{padding:8px 7px}.voice b{letter-spacing:-.01em}}
 .voice small{color:var(--muted);font-weight:500;font-size:.75rem;font-variant-numeric:tabular-nums}
 .voice[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
 .slider{display:flex;flex-direction:column;gap:6px;margin-top:14px}
@@ -123,19 +128,9 @@ input[type=tel]{
   <!-- Voice picker -->
   <section id="voicePanel" class="panel" hidden>
     <h2>Your voice</h2>
-    <div class="voices" id="voices">
-      <button class="voice" data-v="normal" aria-pressed="true"><b>Normal</b><small>0 st</small></button>
-      <button class="voice" data-v="deep" aria-pressed="false"><b>Deep</b><small>−6 st</small></button>
-      <button class="voice" data-v="giant" aria-pressed="false"><b>Giant</b><small>−10 st</small></button>
-      <button class="voice" data-v="high" aria-pressed="false"><b>High</b><small>+5 st</small></button>
-      <button class="voice" data-v="chipmunk" aria-pressed="false"><b>Chipmunk</b><small>+10 st</small></button>
-      <button class="voice" data-v="robot" aria-pressed="false"><b>Robot</b><small>ring mod</small></button>
-      <button class="voice" data-v="cave" aria-pressed="false"><b>Cave</b><small>−2 st + echo</small></button>
-      <button class="voice" data-v="alien" aria-pressed="false"><b>Alien</b><small>+7 st + robot</small></button>
-      <button class="voice" data-v="custom" aria-pressed="false"><b>Custom</b><small>slider</small></button>
-    </div>
+    <div id="voices"></div>
     <div class="slider">
-      <label for="pitch">Pitch <output id="pitchOut">0 semitones</output></label>
+      <label for="pitch">Custom pitch <output id="pitchOut">0 semitones</output></label>
       <input id="pitch" type="range" min="-12" max="12" step="1" value="0">
     </div>
     <label class="toggle"><input id="monitor" type="checkbox"> Hear myself (use headphones)</label>
@@ -227,21 +222,42 @@ class PitchShifter extends AudioWorkletProcessor {
 }
 registerProcessor('pitch-shifter', PitchShifter);`;
 
-const VOICES = {
-  normal:   {st:0},
-  deep:     {st:-6},
-  giant:    {st:-10},
-  high:     {st:5},
-  chipmunk: {st:10},
-  robot:    {st:-1, robot:true},
-  cave:     {st:-2, echo:0.45},
-  alien:    {st:7, robot:true, echo:0.2},
-  custom:   null
-};
+/* Each voice: st = pitch in semitones; robot = ring-mod Hz; echo = amount (0-1), delay = seconds;
+   filter = [type, Hz, Q, gain dB]; dist = distortion (0-1); trem = [Hz, depth]; vib = [Hz, depth in pitch ratio]. */
+const VOICE_GROUPS = [
+  ['Pitch', {
+    normal:   {name:'Normal',   hint:'Your voice',      st:0},
+    deep:     {name:'Deep',     hint:'−6 st',           st:-6},
+    giant:    {name:'Giant',    hint:'−10 st',          st:-10},
+    high:     {name:'High',     hint:'+5 st',           st:5},
+    kid:      {name:'Kid',      hint:'+7 st, bright',   st:7, filter:['highpass', 250, 0.7]},
+    chipmunk: {name:'Chipmunk', hint:'+10 st',          st:10},
+  }],
+  ['Characters', {
+    robot:    {name:'Robot',    hint:'Metallic buzz',   st:-1, robot:50},
+    alien:    {name:'Alien',    hint:'High + buzz',     st:7, robot:85, echo:0.2},
+    monster:  {name:'Monster',  hint:'Low + growl',     st:-9, dist:0.45, filter:['lowpass', 3200, 0.7]},
+    villain:  {name:'Villain',  hint:'Dark + gritty',   st:-5, dist:0.25, filter:['lowpass', 2600, 0.9], echo:0.12, delay:0.09},
+    ghost:    {name:'Ghost',    hint:'Floaty + echo',   st:3, echo:0.55, delay:0.35, trem:[5, 0.5]},
+    elder:    {name:'Old timer',hint:'Shaky voice',     st:-2, vib:[5.5, 0.025], filter:['bandpass', 1400, 0.4]},
+    wobble:   {name:'Wobble',   hint:'Pitch swoops',    st:0, vib:[1.1, 0.12]},
+    underwater:{name:'Underwater',hint:'Muffled bubbles',st:-3, filter:['lowpass', 450, 1.2], vib:[3, 0.04]},
+    announcer:{name:'Announcer',hint:'Big + booming',   st:-3, filter:['peaking', 180, 0.8, 7], echo:0.22, delay:0.12},
+  }],
+  ['Effects', {
+    radio:    {name:'Radio',    hint:'Walkie-talkie',   filter:['bandpass', 1800, 1.4], dist:0.55},
+    phone:    {name:'Old phone',hint:'Thin + crackly',  filter:['bandpass', 1200, 0.9], dist:0.18},
+    megaphone:{name:'Megaphone',hint:'Loud + harsh',    filter:['highpass', 650, 0.9], dist:0.75, echo:0.1, delay:0.08},
+    cave:     {name:'Cave',     hint:'Echoes',          st:-2, echo:0.45},
+    stadium:  {name:'Stadium',  hint:'Big long echo',   echo:0.5, delay:0.45},
+    fan:      {name:'Fan',      hint:'Choppy flutter',  trem:[24, 0.9]},
+  }],
+];
+const VOICES = Object.assign({}, ...VOICE_GROUPS.map(g => g[1]));
 
 const $ = s => document.querySelector(s);
 const PREFIX = 'masquerade-calls-v1-';
-let ctx, mic, shifter, ring, ringOsc, echoDelay, echoFb, echoWet, master, monitorGain, analyser, outStream;
+let ctx, mic, shifter, filter, shaper, shaperOut, trem, tremOsc, tremDepth, vibOsc, vibDepth, ring, ringOsc, echoDelay, echoFb, echoWet, master, monitorGain, analyser, outStream;
 let robotOn = false, muted = false;
 let peer, myCode = null, currentCall = null, incoming = null, timerInt = null, ringTimeout = null;
 
@@ -260,6 +276,14 @@ async function startAudio(){
 
   mic = ctx.createMediaStreamSource(stream);
   shifter = new AudioWorkletNode(ctx, 'pitch-shifter', {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
+  filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 20000; filter.Q.value = 0.7;
+  shaper = ctx.createWaveShaper(); shaper.oversample = '2x';
+  shaperOut = ctx.createGain();
+  trem = ctx.createGain(); trem.gain.value = 1;
+  tremOsc = ctx.createOscillator(); tremOsc.frequency.value = 5; tremOsc.start();
+  tremDepth = ctx.createGain(); tremDepth.gain.value = 0; tremOsc.connect(tremDepth); tremDepth.connect(trem.gain);
+  vibOsc = ctx.createOscillator(); vibOsc.frequency.value = 5; vibOsc.start();
+  vibDepth = ctx.createGain(); vibDepth.gain.value = 0; vibOsc.connect(vibDepth);
   ring = ctx.createGain(); ring.gain.value = 1;
   ringOsc = ctx.createOscillator(); ringOsc.type = 'sine'; ringOsc.frequency.value = 50; ringOsc.start();
   echoDelay = ctx.createDelay(1); echoDelay.delayTime.value = 0.23;
@@ -270,37 +294,71 @@ async function startAudio(){
   analyser = ctx.createAnalyser(); analyser.fftSize = 512;
   const dest = ctx.createMediaStreamDestination();
 
-  mic.connect(shifter); shifter.connect(ring);
+  vibDepth.connect(shifter.parameters.get('pitch'));
+  mic.connect(shifter); shifter.connect(filter); filter.connect(shaper); shaper.connect(shaperOut);
+  shaperOut.connect(trem); trem.connect(ring);
   ring.connect(master);
   ring.connect(echoDelay); echoDelay.connect(echoFb); echoFb.connect(echoDelay);
   echoDelay.connect(echoWet); echoWet.connect(master);
-  master.connect(dest); master.connect(analyser);
-  master.connect(monitorGain); monitorGain.connect(ctx.destination);
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6; limiter.knee.value = 4; limiter.ratio.value = 12;
+  limiter.attack.value = 0.003; limiter.release.value = 0.15;
+  master.connect(limiter); limiter.connect(dest); limiter.connect(analyser);
+  limiter.connect(monitorGain); monitorGain.connect(ctx.destination);
 
   outStream = dest.stream;
   drawMeter();
 }
 
-function setRobot(on){
+function setRobot(hz){
+  const on = !!hz;
+  if (on) ringOsc.frequency.setValueAtTime(hz, ctx.currentTime);
   if (on === robotOn) return;
   robotOn = on;
   if (on){ ring.gain.value = 0; ringOsc.connect(ring.gain); }
   else { ringOsc.disconnect(); ring.gain.value = 1; }
 }
+const curves = {};
+function distCurve(amount){
+  const key = amount.toFixed(2);
+  if (curves[key]) return curves[key];
+  const n = 1024, k = amount * 60, c = new Float32Array(n);
+  for (let i = 0; i < n; i++){ const x = i * 2 / (n - 1) - 1; c[i] = (1 + k) * x / (1 + k * Math.abs(x)); }
+  return curves[key] = c;
+}
 function applyVoice(v){
-  const t = ctx.currentTime;
-  shifter.parameters.get('pitch').setValueAtTime(Math.pow(2, v.st / 12), t);
-  setRobot(!!v.robot);
+  const t = ctx.currentTime, st = v.st || 0;
+  shifter.parameters.get('pitch').setValueAtTime(Math.pow(2, st / 12), t);
+  setRobot(v.robot || 0);
+
+  const [ft, ff, fq, fg] = v.filter || ['lowpass', 20000, 0.7, 0];
+  filter.type = ft; filter.frequency.setTargetAtTime(ff, t, 0.02); filter.Q.setTargetAtTime(fq, t, 0.02);
+  filter.gain.setTargetAtTime(fg || 0, t, 0.02);
+
+  const d = v.dist || 0;
+  shaper.curve = d ? distCurve(d) : null;
+  shaperOut.gain.setTargetAtTime(d ? 1 - d * 0.45 : 1, t, 0.02);
+
+  const [th, tdep] = v.trem || [5, 0];
+  tremOsc.frequency.setValueAtTime(th, t);
+  trem.gain.setTargetAtTime(1 - tdep / 2, t, 0.02);
+  tremDepth.gain.setTargetAtTime(tdep / 2, t, 0.02);
+
+  const [vh, vdep] = v.vib || [5, 0];
+  vibOsc.frequency.setValueAtTime(vh, t);
+  vibDepth.gain.setTargetAtTime(vdep, t, 0.02);
+
   const e = v.echo || 0;
+  echoDelay.delayTime.setTargetAtTime(v.delay || 0.23, t, 0.05);
   echoWet.gain.setTargetAtTime(e, t, 0.02);
   echoFb.gain.setTargetAtTime(e * 0.75, t, 0.02);
-  $('#pitch').value = v.st;
-  $('#pitchOut').textContent = (v.st > 0 ? '+' : v.st < 0 ? '−' : '') + Math.abs(v.st) + ' semitones';
+
+  $('#pitch').value = st;
+  $('#pitchOut').textContent = (st > 0 ? '+' : st < 0 ? '−' : '') + Math.abs(st) + ' semitones';
 }
 function selectVoice(name){
   document.querySelectorAll('.voice').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === name)));
-  if (name === 'custom') applyVoice({st:+$('#pitch').value});
-  else applyVoice(VOICES[name]);
+  applyVoice(name === 'custom' ? {st:+$('#pitch').value} : VOICES[name]);
 }
 
 function drawMeter(){
@@ -407,6 +465,22 @@ $('#startBtn').addEventListener('click', async () => {
   }
 });
 
+(function renderVoices(){
+  const box = $('#voices');
+  for (const [title, voices] of VOICE_GROUPS){
+    const g = document.createElement('div'); g.className = 'vgroup';
+    const h = document.createElement('h3'); h.textContent = title; g.appendChild(h);
+    const grid = document.createElement('div'); grid.className = 'voices';
+    for (const [key, v] of Object.entries(voices)){
+      const b = document.createElement('button');
+      b.className = 'voice'; b.dataset.v = key; b.setAttribute('aria-pressed', String(key === 'normal'));
+      const n = document.createElement('b'); n.textContent = v.name;
+      const sm = document.createElement('small'); sm.textContent = v.hint;
+      b.append(n, sm); grid.appendChild(b);
+    }
+    g.appendChild(grid); box.appendChild(g);
+  }
+})();
 $('#voices').addEventListener('click', e => {
   const b = e.target.closest('.voice'); if (b) selectVoice(b.dataset.v);
 });
