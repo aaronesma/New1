@@ -3,8 +3,9 @@
 Browser voice calls with a live voice changer. Open the page, turn on the microphone, pick a voice, and call someone by their 6-digit code. Both people need the page open; it does not dial regular phone numbers.
 
 ## Voices
-- **Pitch:** Normal, Deep (−6 semitones), Giant (−10), High (+5), Kid (+7), Chipmunk (+10)
-- **Characters:** Robot, Alien, Monster, Villain, Ghost, Old timer, Wobble, Underwater, Announcer
+- **Pitch:** Normal, Low (−3 semitones), Deep (−6), Giant (−10), High (+5), Chipmunk (+10)
+- **People:** Woman, Girl, Man, Boy, Kid, Old timer
+- **Characters:** Robot, Cyborg, Alien, Monster, Villain, Ghost, Wobble, Underwater, Announcer
 - **Effects:** Radio, Old phone, Megaphone, Cave, Stadium, Fan
 - **Custom pitch** slider (−12 to +12 semitones)
 
