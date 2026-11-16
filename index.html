@@ -257,9 +257,12 @@ class Vocoder extends AudioWorkletProcessor {
     {name:'active',  defaultValue:0, minValue:0,    maxValue:1, automationRate:'k-rate'}]; }
   constructor(){
     super();
-    const N = this.N = sampleRate >= 44100 ? 2048 : 1024, os = this.os = 4, H = N / 2;
+    const N = this.N = sampleRate >= 32000 ? 2048 : 1024, os = this.os = 4, H = N / 2;
     this.step = N / os; this.lat = N - this.step; this.rover = this.lat;
-    this.inF = new Float32Array(N); this.outF = new Float32Array(N); this.acc = new Float32Array(2 * N);
+    this.work = new Float32Array(N); this.stage = 4; this.fp = 1; this.ff = 1;
+    // Output queue: a frame finishes up to one hop after it starts, so prime with two hops of silence.
+    this.qMask = 16383; this.outQ = new Float32Array(16384); this.qR = 0; this.qW = 2 * this.step;
+    this.inF = new Float32Array(N); this.acc = new Float32Array(2 * N);
     this.lastPh = new Float64Array(H + 1); this.sumPh = new Float64Array(H + 1);
     this.re = new Float32Array(N); this.im = new Float32Array(N);
     this.cre = new Float32Array(N); this.cim = new Float32Array(N);
@@ -288,12 +291,14 @@ class Vocoder extends AudioWorkletProcessor {
       }
     }
   }
-  frame(pitch, formant){
+  // The frame's work is split into four stages, one per 128-sample audio block, so no single
+  // block has to do all of it. On phones a full frame in one block can miss the audio deadline,
+  // which is heard as choppy dropouts.
+  stage0(){
     const N = this.N, H = N / 2, os = this.os, step = this.step, re = this.re, im = this.im;
-    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N;
-    for (let k = 0; k < N; k++){ re[k] = this.inF[k] * this.win[k]; im[k] = 0; }
+    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N, cre = this.cre, cim = this.cim;
+    for (let k = 0; k < N; k++){ re[k] = this.work[k] * this.win[k]; im[k] = 0; }
     this.fft(re, im, false);
-    const cre = this.cre, cim = this.cim;
     for (let k = 0; k <= H; k++){
       const r = re[k], i = im[k], mag = 2 * Math.sqrt(r * r + i * i), ph = Math.atan2(i, r);
       let d = ph - this.lastPh[k]; this.lastPh[k] = ph; d -= k * expct;
@@ -303,6 +308,10 @@ class Vocoder extends AudioWorkletProcessor {
       this.aMag[k] = mag;
       cre[k] = Math.log(mag + 1e-7); cim[k] = 0;
     }
+  }
+  stage1(){
+    const N = this.N, H = N / 2, os = this.os, step = this.step, re = this.re, im = this.im;
+    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N, cre = this.cre, cim = this.cim;
     // Below ~90 Hz there is no voice, only rumble; hold the level flat so the envelope doesn't dip there.
     const kLow = Math.max(1, Math.round(90 / fpb));
     let lowMax = -1e9; for (let k = kLow; k < kLow * 3; k++) if (cre[k] > lowMax) lowMax = cre[k];
@@ -317,6 +326,10 @@ class Vocoder extends AudioWorkletProcessor {
     for (let k = 0; k <= H; k++){ const e = Math.exp(cre[k]); this.env[k] = e; if (e > emax) emax = e; }
     const floor = emax * 0.003 + 1e-9; // ~-50 dB: stops quiet bands from being boosted into noise
     for (let k = 0; k <= H; k++) if (this.env[k] < floor) this.env[k] = floor;
+  }
+  stage2(pitch, formant){
+    const N = this.N, H = N / 2, os = this.os, step = this.step, re = this.re, im = this.im;
+    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N, cre = this.cre, cim = this.cim;
     // Peak-locked pitch shifting: each spectral peak (a harmonic) is moved as a rigid block with
     // its neighbouring bins, keeping their phase relationship. This avoids the smeared, grainy
     // sound of shifting every bin independently.
@@ -357,12 +370,15 @@ class Vocoder extends AudioWorkletProcessor {
     }
     this.prevPh.set(sumPh); for (let k = 0; k <= H; k++) this.prevAt[k] = this.curAt[k];
     this.frameNo++;
+  }
+  stage3(){
+    const N = this.N, H = N / 2, os = this.os, step = this.step, re = this.re, im = this.im;
+    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N, cre = this.cre, cim = this.cim;
     this.fft(re, im, true);
     const sc = 2 / (H * os * 1.5); // 1.5 = summed Hann² overlap at 4x
     for (let k = 0; k < N; k++) this.acc[k] += this.win[k] * re[k] * sc;
-    for (let k = 0; k < step; k++) this.outF[k] = this.acc[k];
+    for (let k = 0; k < step; k++){ this.outQ[this.qW] = this.acc[k]; this.qW = (this.qW + 1) & this.qMask; }
     this.acc.copyWithin(0, step); this.acc.fill(0, N);
-    this.inF.copyWithin(0, step, step + this.lat);
   }
   process(inputs, outputs, params){
     const inp = inputs[0] && inputs[0][0], out = outputs[0];
@@ -370,15 +386,30 @@ class Vocoder extends AudioWorkletProcessor {
     const o = out[0];
     if (params.active[0] < 0.5){ o.set(inp); }
     else {
-      const p = params.pitch[0], f = params.formant[0];
-      for (let i = 0; i < inp.length; i++){
-        this.inF[this.rover] = inp[i];
-        o[i] = this.outF[this.rover - this.lat];
-        if (++this.rover >= this.N){ this.rover = this.lat; this.frame(p, f); }
+      const n = inp.length;
+      for (let i = 0; i < n; i++){
+        this.inF[this.rover++] = inp[i];
+        o[i] = this.outQ[this.qR]; this.outQ[this.qR] = 0; this.qR = (this.qR + 1) & this.qMask;
+        if (this.rover >= this.N){
+          // finish any frame still in progress before starting the next one
+          while (this.stage < 4) this.runStage();
+          this.work.set(this.inF); this.inF.copyWithin(0, this.step, this.N); this.rover = this.lat;
+          this.fp = params.pitch[0]; this.ff = params.formant[0]; this.stage = 0;
+        }
       }
+      if (this.stage < 4) this.runStage();
     }
     for (let c = 1; c < out.length; c++) out[c].set(o);
     return true;
+  }
+  runStage(){
+    switch (this.stage){
+      case 0: this.stage0(); break;
+      case 1: this.stage1(); break;
+      case 2: this.stage2(this.fp, this.ff); break;
+      case 3: this.stage3(); break;
+    }
+    this.stage++;
   }
 }
 registerProcessor('vocoder', Vocoder);`;
@@ -439,11 +470,20 @@ function show(id, on){ $(id).hidden = !on; }
 /* ---------- Audio graph ---------- */
 async function startAudio(){
   const stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}});
-  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  // 24 kHz is plenty for voice and halves the processing load; a 'balanced' buffer absorbs
+  // brief CPU spikes on phones. Fall back to the device default if the browser refuses.
+  const AC = window.AudioContext || window.webkitAudioContext;
+  try {
+    ctx = new AC({sampleRate:24000, latencyHint:'balanced'});
+    mic = ctx.createMediaStreamSource(stream);
+  } catch(e){
+    try { if (ctx) ctx.close(); } catch(_){}
+    ctx = new AC({latencyHint:'balanced'});
+    mic = ctx.createMediaStreamSource(stream);
+  }
   const url = URL.createObjectURL(new Blob([WORKLET], {type:'application/javascript'}));
   await ctx.audioWorklet.addModule(url);
 
-  mic = ctx.createMediaStreamSource(stream);
   shifter = new AudioWorkletNode(ctx, 'pitch-shifter', {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
   vocoder = new AudioWorkletNode(ctx, 'vocoder', {numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[1]});
   hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 20; hp.Q.value = 0.7;
