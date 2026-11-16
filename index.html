@@ -252,8 +252,8 @@ class PitchShifter extends AudioWorkletProcessor {
 }
 registerProcessor('pitch-shifter', PitchShifter);
 /* Phase vocoder with spectral-envelope preservation: shifts pitch and formants independently.
-   Based on the classic STFT pitch shifter; the cepstral envelope is removed before shifting
-   and re-applied (optionally stretched by 'formant') afterwards. */
+   Harmonics are moved as rigid blocks (peak-locked); each gets the gain that maps the voice's
+   envelope from where it came from to where it lands (optionally stretched by 'formant'). */
 class Vocoder extends AudioWorkletProcessor {
   static get parameterDescriptors(){ return [
     {name:'pitch',   defaultValue:1, minValue:0.25, maxValue:4, automationRate:'k-rate'},
@@ -272,13 +272,13 @@ class Vocoder extends AudioWorkletProcessor {
     this.cre = new Float32Array(N); this.cim = new Float32Array(N);
     this.aMag = new Float32Array(H + 1); this.aFrq = new Float32Array(H + 1);
     this.sMag = new Float32Array(H + 1); this.sFrq = new Float32Array(H + 1); this.env = new Float32Array(H + 1);
-    this.peaks = new Int32Array(H); this.prevPh = new Float64Array(H + 1); this.prevAt = new Int32Array(H + 1).fill(-5); this.curAt = new Int32Array(H + 1).fill(-5); this.frameNo = 0;
+    this.peaks = new Int32Array(H); this.np = 0; this.tmpEnv = new Float32Array(H + 1); this.tops = new Int32Array(H);
+    this.envW = Math.max(3, Math.round(100 / (sampleRate / N))); this.prevPh = new Float64Array(H + 1); this.prevAt = new Int32Array(H + 1).fill(-5); this.curAt = new Int32Array(H + 1).fill(-5); this.frameNo = 0;
     this.win = new Float32Array(N); for (let k = 0; k < N; k++) this.win[k] = 0.5 - 0.5 * Math.cos(2 * Math.PI * k / N);
     this.cosT = new Float32Array(N / 2); this.sinT = new Float32Array(N / 2);
     for (let k = 0; k < N / 2; k++){ this.cosT[k] = Math.cos(2 * Math.PI * k / N); this.sinT[k] = Math.sin(2 * Math.PI * k / N); }
     this.rev = new Uint32Array(N); const bits = Math.log2(N);
     for (let i = 0; i < N; i++){ let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); this.rev[i] = r; }
-    this.lifter = Math.round(sampleRate / 400); // 2.5 ms: keeps formant detail, drops harmonic ripple
   }
   fft(re, im, inv){
     const N = this.N, rev = this.rev;
@@ -310,42 +310,43 @@ class Vocoder extends AudioWorkletProcessor {
       d -= Math.PI * q;
       this.aFrq[k] = k * fpb + os * d / (2 * Math.PI) * fpb;
       this.aMag[k] = mag;
-      cre[k] = Math.log(mag + 1e-7); cim[k] = 0;
     }
   }
   stage1(){
-    const N = this.N, H = N / 2, os = this.os, step = this.step, re = this.re, im = this.im;
-    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N, cre = this.cre, cim = this.cim;
-    // Below ~90 Hz there is no voice, only rumble; hold the level flat so the envelope doesn't dip there.
-    const kLow = Math.max(1, Math.round(90 / fpb));
-    let lowMax = -1e9; for (let k = kLow; k < kLow * 3; k++) if (cre[k] > lowMax) lowMax = cre[k];
-    for (let k = 0; k < kLow * 3; k++) if (cre[k] < lowMax) cre[k] = lowMax;
-    for (let k = H + 1; k < N; k++){ cre[k] = cre[N - k]; cim[k] = 0; }
-    // cepstral smoothing -> spectral envelope
-    this.fft(cre, cim, true);
-    const L = this.lifter;
-    for (let k = 0; k < N; k++){ if (k > L && k < N - L){ cre[k] = 0; } else { cre[k] /= N; } cim[k] = 0; }
-    this.fft(cre, cim, false);
-    let emax = 0;
-    for (let k = 0; k <= H; k++){ const e = Math.exp(cre[k]); this.env[k] = e; if (e > emax) emax = e; }
-    const floor = emax * 0.003 + 1e-9; // ~-50 dB: stops quiet bands from being boosted into noise
-    for (let k = 0; k <= H; k++) if (this.env[k] < floor) this.env[k] = floor;
+    // Spectral envelope through the tops of the harmonics, joined by straight lines (in dB).
+    // It follows the real voice shape at every pitch, so moving pitch down or up doesn't tilt
+    // the tone. (The old smoothed-cepstrum estimate over-boosted bass on lowered voices.)
+    const H = this.N / 2, aMag = this.aMag, tmp = this.tmpEnv, env = this.env, w = this.envW;
+    for (let k = 0; k <= H; k++) tmp[k] = Math.log(aMag[k] + 1e-9);
+    let amax = 0; for (let k = 0; k <= H; k++) if (aMag[k] > amax) amax = aMag[k];
+    const thr = amax * 0.0005, peaks = this.peaks, tops = this.tops;
+    let np = 0, nt = 0;
+    for (let k = 2; k < H - 1; k++){
+      const m = aMag[k];
+      if (m > thr && m > aMag[k - 1] && m >= aMag[k + 1] && m > aMag[k - 2] && m >= aMag[k + 2]){
+        peaks[np++] = k;
+        // a "top" is a peak within 10 dB of the loudest bin around it (skips window side-lobes)
+        let mx = -1e9; const lo = k - w < 0 ? 0 : k - w, hi = k + w > H ? H : k + w;
+        for (let i = lo; i <= hi; i++) if (tmp[i] > mx) mx = tmp[i];
+        if (tmp[k] >= mx - 1.15) tops[nt++] = k;
+      }
+    }
+    this.np = np;
+    if (nt === 0){ for (let k = 0; k <= H; k++) env[k] = tmp[k]; return; }
+    for (let k = 0; k <= tops[0]; k++) env[k] = tmp[tops[0]];
+    for (let t = 0; t < nt - 1; t++){
+      const a = tops[t], b = tops[t + 1], va = tmp[a], vb = tmp[b];
+      for (let k = a; k <= b; k++) env[k] = va + (vb - va) * (k - a) / (b - a);
+    }
+    for (let k = tops[nt - 1]; k <= H; k++) env[k] = tmp[tops[nt - 1]];
   }
   stage2(pitch, formant){
-    const N = this.N, H = N / 2, os = this.os, step = this.step, re = this.re, im = this.im;
-    const fpb = sampleRate / N, expct = 2 * Math.PI * step / N, cre = this.cre, cim = this.cim;
+    const N = this.N, H = N / 2, step = this.step, re = this.re, im = this.im;
     // Peak-locked pitch shifting: each spectral peak (a harmonic) is moved as a rigid block with
     // its neighbouring bins, keeping their phase relationship. This avoids the smeared, grainy
     // sound of shifting every bin independently.
-    const env = this.env, aMag = this.aMag, ph = this.lastPh, sumPh = this.sumPh, peaks = this.peaks;
-    const envAt = x => { if (x >= H) return env[H]; const i0 = Math.floor(x), f = x - i0; return env[i0] * (1 - f) + env[i0 + 1] * f; };
-    let amax = 0; for (let k = 0; k <= H; k++) if (aMag[k] > amax) amax = aMag[k];
-    const thr = amax * 0.0005;
-    let np = 0;
-    for (let k = 2; k < H - 1; k++){
-      const m = aMag[k];
-      if (m > thr && m > aMag[k - 1] && m >= aMag[k + 1] && m > aMag[k - 2] && m >= aMag[k + 2]) peaks[np++] = k;
-    }
+    const env = this.env, aMag = this.aMag, ph = this.lastPh, sumPh = this.sumPh, peaks = this.peaks, np = this.np;
+    const envAt = x => { if (x >= H) return env[H]; if (x <= 0) return env[0]; const i0 = Math.floor(x), f = x - i0; return env[i0] * (1 - f) + env[i0 + 1] * f; };
     re.fill(0); im.fill(0);
     const TAU = 2 * Math.PI, adv = TAU * step / sampleRate;
     for (let i = 0; i < np; i++){
@@ -363,11 +364,12 @@ class Vocoder extends AudioWorkletProcessor {
       let rot = prev + adv * this.aFrq[p] * (pitch - 1); rot -= TAU * Math.floor(rot / TAU);
       sumPh[q] = rot; this.curAt[q] = this.frameNo;
       const base = ph[p] + rot;
+      // One gain per harmonic: envelope where it lands (after formant shift) over where it came from.
+      let g = Math.exp(envAt(q / formant) - env[p]);
+      if (g > 8) g = 8; else if (g < 0.125) g = 0.125;
       for (let k = lo; k <= hi; k++){
         const j = q + (k - p);
         if (j < 0 || j > H) continue;
-        let g = envAt(j / formant) / env[k];
-        if (g > 4) g = 4; else if (g < 0.25) g = 0.25;
         const m = aMag[k] * g, a = base + ph[k] - ph[p];
         re[j] += m * Math.cos(a); im[j] += m * Math.sin(a);
       }
@@ -447,10 +449,10 @@ const VOICE_GROUPS = [
     wobble:   {name:'Wobble',   hint:'Pitch swoops',    st:0, vib:[1.1, 0.12]},
     underwater:{name:'Underwater',hint:'Muffled bubbles',st:-3, filter:['lowpass', 450, 1.2], vib:[3, 0.04]},
     announcer:{name:'Announcer',hint:'Big + booming',   st:-3, filter:['peaking', 180, 0.8, 7], echo:0.22, delay:0.12},
-    // Big chest, low pitch, irregular throat growl, low raspy breath, dark top, heavily compressed.
-    // No distortion: on a bass-heavy voice it smears the words into hiss; the growl supplies the grit.
-    batman:   {name:'Batman',   hint:'Deep gravel',     st:-8, voc:0.8, hp:55, air:0, breath:0.35, bf:1800, growl:0.8,
-               ls:[230, 7], filter:['peaking', 700, 1.2, -4], lp:5200, comp:[-30, 6, 6]},
+    // Deep pitch but clear: formants only slightly lowered, presence and rasp at 2.8 kHz,
+    // strong irregular growl, moderate chest. No distortion or high cut (both made it muffled/hissy).
+    batman:   {name:'Batman',   hint:'Deep gravel',     st:-8, voc:0.88, hp:70, air:1, breath:0.3, bf:2600, growl:0.9,
+               ls:[180, 1.5], filter:['peaking', 2800, 0.9, 4], comp:[-20, 3, 3]},
     narrator: {name:'Narrator', hint:'Deep + warm',     st:-3, voc:0.9,  hp:60,  air:1, breath:0,   filter:['peaking', 150, 0.8, 4], echo:0.1, delay:0.05},
     brute:    {name:'Brute',    hint:'Huge + rough',    st:-8, voc:0.8,  hp:50,  air:0, breath:0.15, dist:0.5, filter:['lowpass', 3000, 0.7]},
   }],
