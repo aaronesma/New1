@@ -26,7 +26,7 @@ The site must be served over HTTPS (GitHub Pages is) for the microphone to work.
 Android: open the link in Chrome and tap **Install app** (or menu → Add to Home screen).
 
 ## How it works
-- Audio: Web Audio API. A small AudioWorklet does real-time granular pitch shifting; other voices combine ring modulation (robot), filters, distortion, tremolo, vibrato and feedback echo. A limiter on the output prevents clipping.
+- Audio: Web Audio API. A small AudioWorklet does real-time granular pitch shifting; Woman, Girl, Man and Boy use a second worklet, a phase vocoder that shifts pitch and formants (voice shape) separately so they sound natural rather than sped up. Other voices combine ring modulation (robot), filters, distortion, tremolo, vibrato and feedback echo. A limiter on the output prevents clipping.
 - Calls: WebRTC peer-to-peer audio, connected through the free public PeerJS server.
 
 ## Limits
